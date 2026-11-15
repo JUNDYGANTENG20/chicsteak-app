@@ -34,6 +34,9 @@
 - [Menu & harga](#menu--harga)
 - [Cara perhitungan](#cara-perhitungan)
 - [Database online (Supabase)](#database-online-supabase)
+  - [Struktur database](#struktur-database)
+  - [Fungsi database (RPC)](#fungsi-database-rpc)
+  - [Hak akses](#hak-akses-row-level-security)
 - [Data contoh](#data-contoh)
 - [Struktur proyek](#struktur-proyek)
 - [Batasan](#batasan)
@@ -130,28 +133,164 @@ Setiap porsi memakai: ayam, saus, dan karbo × faktor porsi, ditambah 1 kemasan.
 
 Semua data — pesanan, stok bahan, ulasan — tersimpan di database **Supabase** (PostgreSQL), sehingga kiosk di satu perangkat dan dashboard owner di perangkat lain selalu sinkron.
 
-| Tabel | Isi |
-|---|---|
-| `menus` | Menu, harga, faktor porsi |
-| `ingredients` | Stok & harga acuan bahan |
-| `orders` | Pesanan (item, total, metode bayar, status) |
-| `reviews` | Ulasan pelanggan |
-| `owners` | Email yang boleh masuk Dashboard owner |
+### Struktur database
 
-**Keamanan**
+```mermaid
+erDiagram
+    orders ||--o{ reviews : "diulas lewat"
+    menus ||..o{ orders : "harga & faktor disalin ke items"
+    ingredients ||..o{ orders : "stok dipotong per pesanan"
+
+    menus {
+        text id PK "small / medium / large"
+        text name
+        int4 price "harga jual (Rp)"
+        numeric factor "faktor porsi"
+    }
+    ingredients {
+        text id PK "chicken, classic, rice, ..."
+        text name
+        text unit
+        numeric stock "stok saat ini"
+        numeric initial "stok acuan 100%"
+        int4 cost "harga acuan per unit (Rp)"
+    }
+    orders {
+        int8 id PK "nomor pesanan"
+        timestamptz created_at
+        jsonb items "daftar item pesanan"
+        int4 total "total bayar (Rp)"
+        text method "qris / cash"
+        text payment "waiting / paid"
+        text status "waiting / processing / ready / completed"
+        bool demo "true = data contoh"
+    }
+    reviews {
+        int8 id PK
+        int8 order_id FK "boleh kosong"
+        text name
+        int4 rating "1-5"
+        text comment "maks 240 karakter"
+        text menu "menu pertama di pesanan"
+        timestamptz created_at
+        bool demo
+    }
+    owners {
+        text email PK "email akun owner"
+    }
+```
+
+> Garis putus-putus = hubungan logis (tanpa *foreign key*): harga menu disalin ke `orders.items` saat pesanan dibuat, jadi riwayat penjualan tidak berubah walaupun harga menu diganti nanti.
+
+#### `menus` — daftar menu
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` 🔑 | text | Kode menu: `small`, `medium`, `large` |
+| `name` | text | Nama tampilan, mis. *CK Steak Medium* |
+| `price` | int4 | Harga jual dalam rupiah |
+| `factor` | numeric | Pengali porsi bahan (Small 1,0 · Medium 1,2 · Large 1,5) |
+
+#### `ingredients` — stok bahan baku
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` 🔑 | text | `chicken`, `classic`, `mushroom`, `lava`, `thunder`, `rice`, `fries`, `packaging` |
+| `name` | text | Nama bahan |
+| `unit` | text | Satuan (porsi, takaran, pcs) |
+| `stock` | numeric | Stok saat ini — berkurang otomatis setiap pesanan dibayar |
+| `initial` | numeric | Stok acuan untuk bar persentase; naik saat restok melebihi nilai ini |
+| `cost` | int4 | Harga acuan per satuan, dipakai menghitung HPP |
+
+#### `orders` — pesanan
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` 🔑 | int8 | Nomor pesanan (otomatis) yang ditunjukkan ke pelanggan |
+| `created_at` | timestamptz | Waktu pesanan dibuat |
+| `items` | jsonb | Daftar item (lihat contoh di bawah) |
+| `total` | int4 | Total bayar, dihitung server dari `menus.price × qty` |
+| `method` | text | `qris` atau `cash` |
+| `payment` | text | `waiting` (tunai belum dibayar) atau `paid` |
+| `status` | text | Alur pesanan (lihat di bawah) |
+| `demo` | bool | `true` untuk data contoh |
+
+Contoh isi `items`:
+```json
+[
+  { "id": "medium", "name": "CK Steak Medium", "price": 17000, "factor": 1.2,
+    "sauce": "lava", "carb": "rice", "qty": 2, "key": "medium-lava-rice" }
+]
+```
+`sauce`: `classic` · `mushroom` · `lava` · `thunder` — `carb`: `rice` · `fries`
+
+Alur `status`:
+```mermaid
+flowchart LR
+    A["Pesan via kiosk"] -->|QRIS| P["processing<br/>Diproses"]
+    A -->|Tunai| W["waiting<br/>Menunggu tunai"]
+    W -->|owner: Tunai diterima| P
+    P -->|owner: Tandai siap| R["ready<br/>Siap diambil"]
+    R -->|owner: Sudah diambil| C["completed<br/>Selesai"]
+```
+Stok bahan dipotong saat pesanan QRIS dibuat, atau saat owner mengonfirmasi pembayaran tunai.
+
+#### `reviews` — ulasan pelanggan
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `id` 🔑 | int8 | Nomor ulasan (otomatis) |
+| `order_id` 🔗 | int8 | Nomor pesanan yang diulas → `orders.id` (boleh kosong; jika pesanan dihapus menjadi kosong) |
+| `name` | text | Nama pelanggan, default *Pelanggan* (maks 30 karakter) |
+| `rating` | int4 | Bintang 1–5 |
+| `comment` | text | Komentar (maks 240 karakter) |
+| `menu` | text | Menu pertama dari pesanan terkait, untuk ditampilkan di kartu ulasan |
+| `created_at` | timestamptz | Waktu ulasan dikirim |
+| `demo` | bool | `true` untuk data contoh |
+
+#### `owners` — akun owner
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| `email` 🔑 | text | Email akun Supabase Auth yang boleh membuka Dashboard owner. Tabel ini tidak bisa dibaca dari aplikasi. |
+
+### Fungsi database (RPC)
+
+Aplikasi tidak menulis langsung ke tabel; semua perubahan lewat fungsi berikut sehingga aturan bisnis selalu dijalankan di server.
+
+| Fungsi | Dipakai oleh | Kegunaan |
+|---|---|---|
+| `place_order(items, method)` | Pelanggan | Validasi menu/saus/karbo/qty, hitung total dari `menus`, cek & potong stok, simpan pesanan |
+| `submit_review(name, rating, comment, order_id)` | Pelanggan | Simpan ulasan (rating 1–5, teks dibatasi) |
+| `rating_summary()` | Pelanggan | Rata-rata rating & jumlah ulasan untuk tombol di kiosk |
+| `is_owner()` | Owner | Cek apakah email yang login terdaftar di `owners` |
+| `confirm_cash(id)` | Owner | Konfirmasi pembayaran tunai + potong stok |
+| `set_order_status(id, status)` | Owner | Ubah status ke `ready` / `completed` |
+| `restock(id, qty)` | Owner | Tambah stok bahan |
+| `reset_demo()` | Owner | Hapus & buat ulang data contoh |
+| `seed_demo(days)` | Internal | Generator data contoh (tidak bisa dipanggil dari aplikasi) |
+
+### Hak akses (Row Level Security)
+
+| Tabel | Pengunjung (tanpa login) | Owner (login) |
+|---|---|---|
+| `menus` | Baca | Baca |
+| `ingredients` | Baca | Baca, restok lewat RPC |
+| `orders` | Hanya membuat pesanan lewat RPC | Baca semua, ubah lewat RPC |
+| `reviews` | Hanya mengirim ulasan lewat RPC | Baca semua |
+| `owners` | – | – (hanya lewat Supabase Dashboard) |
+
+### Keamanan
 - Row Level Security aktif di semua tabel. Tanpa login, browser hanya bisa membaca menu & stok.
 - Pelanggan membuat pesanan & ulasan lewat fungsi `place_order` dan `submit_review`. Harga dihitung ulang di server dari tabel `menus`, jadi total tidak bisa dimanipulasi dari browser, dan stok dicek/dipotong secara atomik.
 - Data penjualan, konfirmasi tunai, ubah status, dan restok hanya untuk akun yang emailnya ada di tabel `owners`.
 - Kunci di `db.js` adalah *publishable key* — memang aman ditaruh di frontend.
 
-**Menambah akun owner**
+### Menambah akun owner
 1. Supabase Dashboard → **Authentication → Users → Add user → Create new user**, isi email & password, centang *Auto Confirm User*.
 2. **SQL Editor** → jalankan:
    ```sql
    insert into public.owners (email) values ('email-owner@contoh.com');
    ```
 
-**Membuat ulang database** — jalankan isi [`supabase/schema.sql`](supabase/schema.sql) di SQL Editor project Supabase baru, lalu ganti `SUPABASE_URL` dan `SUPABASE_KEY` di `db.js`.
+### Membuat ulang database
+
+Jalankan isi [`supabase/schema.sql`](supabase/schema.sql) di SQL Editor project Supabase baru, lalu ganti `SUPABASE_URL` dan `SUPABASE_KEY` di `db.js`.
 
 ## Data contoh
 
