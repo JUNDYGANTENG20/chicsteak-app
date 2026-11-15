@@ -210,7 +210,7 @@ function recapView() {
         `<tr class="clickable" onclick="openReport('${recapType}',${+start})"><td>${periodLabel(recapType, start, true)}</td><td class="r">${num(s.transactions)}</td><td class="r">${num(s.portions)}</td><td class="r">${money(s.revenue)}</td><td class="r muted">${money(s.cogs)}</td><td class="r positive">${money(s.profit)}</td><td class="r">${money(s.qris)}</td><td class="r">${money(s.cash)}</td><td class="r">${s.reviews.length ? `<span class="star-ink">★</span> ${s.rating.toFixed(1).replace(".", ",")}` : "–"}</td></tr>`,
     )
     .join("")}</tbody><tfoot><tr><td>Total</td><td class="r">${num(tot.transactions)}</td><td class="r">${num(tot.portions)}</td><td class="r">${money(tot.revenue)}</td><td class="r">${money(tot.cogs)}</td><td class="r">${money(tot.profit)}</td><td class="r">${money(tot.qris)}</td><td class="r">${money(tot.cash)}</td><td class="r">${tot.rN ? `<span class="star-ink">★</span> ${(tot.rSum / tot.rN).toFixed(1).replace(".", ",")}` : "–"}</td></tr></tfoot></table></div>
-    <div class="demo-note no-print"><span>Riwayat sebelum hari ini adalah <b>data contoh acak</b> untuk demo.</span><button class="btn btn-outline" onclick="resetDemo()">Acak ulang data contoh</button></div>
+    <div class="demo-note no-print"><span>Riwayat sebelum hari ini adalah <b>data contoh acak</b> untuk demo.</span><button class="btn btn-outline" ${busy ? "disabled" : ""} onclick="resetDemo()">${busy ? "Memproses…" : "Acak ulang data contoh"}</button></div>
   </div>
 </section>`;
 }
@@ -277,9 +277,15 @@ window.setRecapType = (t) => { recapType = t; render(); };
 window.downloadRecap = downloadRecap;
 window.filterReviews = (k) => { reviewFilter = { rating: reviewFilter.rating === k ? 0 : k, limit: 12 }; render(); };
 window.moreReviews = () => { reviewFilter.limit += 12; render(); };
-window.resetDemo = () => {
-  if (!confirm("Acak ulang semua data contoh (riwayat pesanan & ulasan)? Pesanan asli tetap disimpan.")) return;
-  regenerateDemo(state);
-  save();
+window.resetDemo = async () => {
+  if (!confirm("Acak ulang semua data contoh (riwayat pesanan & ulasan)? Pesanan & ulasan asli tetap disimpan. Proses ini butuh beberapa detik.")) return;
+  db.bulk = true;
+  busy = true;
+  render();
+  const { error } = await sb.rpc("reset_demo");
+  busy = false;
+  if (error) alert("Gagal mengacak ulang: " + niceError(error));
+  await Promise.all([loadOwnerData(), loadRating()]);
+  db.bulk = false;
   render();
 };

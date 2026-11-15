@@ -17,6 +17,7 @@
   <img src="https://img.shields.io/badge/HTML-5-E34F26?logo=html5&logoColor=white" alt="HTML5">
   <img src="https://img.shields.io/badge/CSS-3-1572B6?logo=css3&logoColor=white" alt="CSS3">
   <img src="https://img.shields.io/badge/JavaScript-Vanilla-F7DF1E?logo=javascript&logoColor=black" alt="JavaScript">
+  <img src="https://img.shields.io/badge/Database-Supabase-3ECF8E?logo=supabase&logoColor=white" alt="Supabase">
   <img src="https://img.shields.io/badge/Hosting-GitHub%20Pages-222?logo=github" alt="GitHub Pages">
 </p>
 
@@ -32,6 +33,7 @@
 - [Cara pakai](#cara-pakai)
 - [Menu & harga](#menu--harga)
 - [Cara perhitungan](#cara-perhitungan)
+- [Database online (Supabase)](#database-online-supabase)
 - [Data contoh](#data-contoh)
 - [Struktur proyek](#struktur-proyek)
 - [Batasan](#batasan)
@@ -48,6 +50,8 @@
 - **Beri ulasan** ⭐ 1–5 bintang dengan nama, nomor pesanan, dan komentar
 
 ### 📊 Dashboard owner
+Dilindungi **login owner** (email + password). Pesanan baru, perubahan stok, dan ulasan muncul **realtime** tanpa perlu refresh.
+
 | Tab | Isi |
 |---|---|
 | **Pesanan aktif** | Antrean pesanan, konfirmasi pembayaran tunai, ubah status *Diproses → Siap diambil → Selesai* |
@@ -71,7 +75,7 @@
 
 ## Cara menjalankan
 
-Aplikasi ini **tanpa backend dan tanpa instalasi** — cukup HTML, CSS, dan JavaScript.
+Frontend cukup HTML, CSS, dan JavaScript (tanpa build). Data disimpan online di **Supabase**.
 
 **Opsi 1 — Online**
 Buka 👉 https://jundyganteng20.github.io/chicsteak-app/
@@ -80,12 +84,12 @@ Buka 👉 https://jundyganteng20.github.io/chicsteak-app/
 ```bash
 git clone https://github.com/JUNDYGANTENG20/chicsteak-app.git
 ```
-Lalu buka `index.html` di browser, atau di VS Code klik kanan `index.html` → **Open with Live Server** (port 5501).
+Lalu buka `index.html` di browser, atau di VS Code klik kanan `index.html` → **Open with Live Server** (port 5501). Perlu koneksi internet karena data diambil dari Supabase.
 
 ## Cara pakai
 
 1. **Pelanggan** — di tab *Kiosk pelanggan*, pilih menu → atur saus & karbo → *Tambah ke pesanan* → *Lanjut pembayaran* → pilih QRIS/Tunai → catat nomor pesanan.
-2. **Owner** — buka *Dashboard owner*:
+2. **Owner** — buka *Dashboard owner* lalu **login** dengan akun owner:
    - *Pesanan aktif*: klik **Tunai diterima** untuk pesanan tunai, lalu **Tandai siap** → **Sudah diambil**.
    - *Stok bahan*: isi jumlah lalu **Tambah** untuk restok.
    - *Laporan*: pilih Harian/Mingguan/Bulanan, geser periode dengan tombol **‹ ›**, klik batang grafik untuk melihat laporan hari itu.
@@ -122,13 +126,43 @@ Setiap porsi memakai: ayam, saus, dan karbo × faktor porsi, ditambah 1 kemasan.
 - **Minggu** dihitung Senin–Minggu.
 - **Pelanggan puas** = persentase ulasan bintang 4–5.
 
+## Database online (Supabase)
+
+Semua data — pesanan, stok bahan, ulasan — tersimpan di database **Supabase** (PostgreSQL), sehingga kiosk di satu perangkat dan dashboard owner di perangkat lain selalu sinkron.
+
+| Tabel | Isi |
+|---|---|
+| `menus` | Menu, harga, faktor porsi |
+| `ingredients` | Stok & harga acuan bahan |
+| `orders` | Pesanan (item, total, metode bayar, status) |
+| `reviews` | Ulasan pelanggan |
+| `owners` | Email yang boleh masuk Dashboard owner |
+
+**Keamanan**
+- Row Level Security aktif di semua tabel. Tanpa login, browser hanya bisa membaca menu & stok.
+- Pelanggan membuat pesanan & ulasan lewat fungsi `place_order` dan `submit_review`. Harga dihitung ulang di server dari tabel `menus`, jadi total tidak bisa dimanipulasi dari browser, dan stok dicek/dipotong secara atomik.
+- Data penjualan, konfirmasi tunai, ubah status, dan restok hanya untuk akun yang emailnya ada di tabel `owners`.
+- Kunci di `db.js` adalah *publishable key* — memang aman ditaruh di frontend.
+
+**Menambah akun owner**
+1. Supabase Dashboard → **Authentication → Users → Add user → Create new user**, isi email & password, centang *Auto Confirm User*.
+2. **SQL Editor** → jalankan:
+   ```sql
+   insert into public.owners (email) values ('email-owner@contoh.com');
+   ```
+
+**Membuat ulang database** — jalankan isi [`supabase/schema.sql`](supabase/schema.sql) di SQL Editor project Supabase baru, lalu ganti `SUPABASE_URL` dan `SUPABASE_KEY` di `db.js`.
+
 ## Data contoh
 
-Saat pertama dibuka, aplikasi otomatis membuat **riwayat penjualan acak 120 hari terakhir** (± 2.500 pesanan) dan **± 800 ulasan** dengan nama & komentar fiktif, supaya laporan dan rekap langsung berisi. Polanya dibuat realistis untuk kantin kampus: ramai di jam makan siang dan sore, sepi di akhir pekan, dan sedikit meningkat dari waktu ke waktu.
+Database sudah berisi **riwayat penjualan contoh 120 hari terakhir** dan ulasan dengan nama & komentar fiktif, supaya laporan dan rekap langsung terisi. Data contoh dibuat oleh fungsi `seed_demo()` dan dirancang **selalu tumbuh**: omzet, transaksi, porsi, rata-rata per transaksi, dan laba kotor tidak pernah turun dibanding hari/minggu/bulan sebelumnya.
 
-- Data contoh ditandai `demo: true`; pesanan asli tidak ikut terhapus.
-- Tombol **Acak ulang data contoh** ada di tab *Rekap penjualan*.
-- Untuk mengosongkan semua data, hapus `localStorage` dengan kunci `chic-kampus-state` (DevTools → Application → Local Storage).
+- Data contoh ditandai `demo = true`; pesanan & ulasan asli tidak ikut terhapus.
+- Tombol **Acak ulang data contoh** ada di tab *Rekap penjualan* (khusus owner).
+- Menghapus semua data contoh (SQL Editor):
+  ```sql
+  delete from public.reviews where demo; delete from public.orders where demo;
+  ```
 
 ## Struktur proyek
 
@@ -136,27 +170,30 @@ Saat pertama dibuka, aplikasi otomatis membuat **riwayat penjualan acak 120 hari
 chicsteak-app/
 ├── index.html          # Kerangka halaman, memuat semua script
 ├── styles.css          # Tampilan (responsif + gaya cetak)
-├── app.js              # Inti aplikasi: menu, keranjang, pesanan, stok, keuangan, kiosk, ulasan
+├── app.js              # Inti aplikasi: menu, keranjang, kiosk, dashboard owner, ulasan
+├── db.js               # Koneksi Supabase: muat data, realtime, login owner
 ├── reports.js          # Tab Laporan, Rekap penjualan (CSV) dan Ulasan
-├── demo-data.js        # Pembantu tanggal/periode + generator data contoh acak
+├── periods.js          # Pembantu tanggal & periode (harian/mingguan/bulanan)
+├── supabase/
+│   └── schema.sql      # Skema database, keamanan (RLS) & fungsi RPC
 ├── assets/
 │   └── logo-chic-kampus.jpg
 └── docs/
     └── screenshots/    # Gambar untuk README
 ```
 
-Urutan script di `index.html` penting: `demo-data.js` → `reports.js` → `app.js`.
+Urutan script di `index.html` penting: `supabase-js` → `periods.js` → `reports.js` → `db.js` → `app.js`.
 
 ## Batasan
 
-- **Data tersimpan di browser masing-masing** (`localStorage`). Pesanan dari satu perangkat tidak terlihat di perangkat lain, dan data hilang jika data browser dihapus.
+- Perlu koneksi internet.
 - Pembayaran QRIS masih **simulasi** — belum terhubung ke payment gateway.
-- Belum ada login, jadi siapa pun yang membuka halaman bisa masuk ke Dashboard owner.
+- Project Supabase gratis akan *di-pause* otomatis bila tidak dipakai ±7 hari; aktifkan lagi dari Supabase Dashboard.
 
 ## Rencana pengembangan
 
-- [ ] Database online (mis. Supabase/Firebase) agar kiosk & dashboard owner tersinkron antar perangkat
-- [ ] Login untuk owner
+- [x] Database online (Supabase) agar kiosk & dashboard owner tersinkron antar perangkat
+- [x] Login untuk owner
 - [ ] Integrasi QRIS sungguhan
 - [ ] Balasan owner untuk ulasan pelanggan
 - [ ] Menu minuman & add-on
